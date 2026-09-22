@@ -1,0 +1,26 @@
+[game]
+name = "WinningEleven2002"
+id = "SLPM-87056"
+players = 2
+exe = "disc/SLPM_870.56"
+disc = "disc/Winning Eleven 2002 (PS1) World Cup 2002.cue"
+load_address = "0x80010000"
+entry_pc = "0x80010008"
+text_size = "0x00052000"
+stack_base = "0x801FFFF0"
+
+[prepare_disc]
+out_dir = "disc"
+bin_name = "Winning Eleven 2002 (PS1) World Cup 2002.BIN"
+cue_name = "Winning Eleven 2002 (PS1) World Cup 2002.cue"
+boot_exe = "SLPM_870.56"
+
+[recompiler]
+seeds = "seeds/ghidra_funcs.txt"
+out_dir = "generated"
+strict = true
+
+[runtime]
+window_title = "Winning Eleven 2002 Recompiled"
+memcard_dir = "saves"
+overlay_cache = true
