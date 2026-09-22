@@ -27,7 +27,7 @@ public class HudController implements InputManager.InputDeviceListener {
     private static final String TAG = "rechan-hud";
     private static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
     private static final String PREFS = "sheepraider_hud";
-    private static final String KEY_LAYOUT = "layout_json";
+    private static final String KEY_LAYOUT = "layout_json_v2";
     private static final long CONTEXT_POLL_MS = 100;
 
     private final Activity activity;

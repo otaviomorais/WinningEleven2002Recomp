@@ -5,8 +5,6 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
-import android.os.Handler;
-import android.os.Looper;
 import android.util.Log;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
@@ -20,29 +18,22 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Fullscreen transparent overlay that draws and handles the contextual touch
- * controls (virtual joystick + action buttons). Input is forwarded to the
- * engine through HudBridge (JNI) into the shared gamepad state — the engine
- * treats it exactly like a physical gamepad.
- *
- * Features: contextual control sets (per gameplay context), fade/scale
- * transitions, safe-area aware default layout, user layout editing
- * (long-press a control), per-control size, global opacity and low-contrast
- * mode, light haptic feedback, all persisted locally as JSON.
+ * Fullscreen transparent overlay for on-screen touch controls.
+ * Designed with authentic PlayStation layout, dedicated settings button,
+ * and zero accidental edit-mode triggers during intense gameplay.
  */
 public class TouchHudView extends View {
 
     private static final String TAG = "rechan-hud";
     private static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG);
-    private static final long EDIT_LONGPRESS_MS = 600;
 
-    /** One on-screen control (button or the joystick). */
-    private static class Control {
+    /** One on-screen control (button or joystick or settings menu). */
+    public static class Control {
         final String id;
         final String label;
-        final int buttonId; // -1 for the joystick
-        float nx, ny;       // normalized center within the safe rect
-        float nr;           // normalized radius (relative to min(safeW, safeH))
+        final int buttonId; // -1 for joystick, -2 for settings/edit button
+        float nx, ny;       // normalized center within safe rect [0..1]
+        float nr;           // normalized radius relative to min(safeW, safeH)
         boolean interactive = true;
 
         Control(String id, String label, int buttonId, float nx, float ny, float nr) {
@@ -56,13 +47,12 @@ public class TouchHudView extends View {
     }
 
     private final HudController controller;
-    private final Handler handler = new Handler(Looper.getMainLooper());
-
     private final List<Control> controls = new ArrayList<>();
     private Control joystick;
+    private Control editButton;
 
     private int insetL, insetT, insetR, insetB;
-    private float opacity = 0.45f;
+    private float opacity = 0.50f;
     private boolean lowContrast = false;
     private boolean editMode = false;
     private Control selectedControl;
@@ -74,12 +64,6 @@ public class TouchHudView extends View {
     private final Set<Integer> pressedButtons = new HashSet<>();
     private int joyPointerId = -1;
     private float joyKnobDx, joyKnobDy;
-
-    // Long-press -> edit mode
-    private final Runnable longPressRunnable = this::enterEditMode;
-    private float longPressStartX, longPressStartY;
-    private int longPressPointer = -1;
-    private boolean longPressPending;
 
     // Edit-mode chips
     private final List<RectF> chipBounds = new ArrayList<>();
@@ -95,18 +79,32 @@ public class TouchHudView extends View {
         super(context);
         this.controller = controller;
         setFocusable(false);
-        setClickable(true); // receive touch events
+        setClickable(true);
         setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
 
-        joystick = new Control("joy", "", -1, 0.12f, 0.70f, 0.105f);
+        // Analog stick (left)
+        joystick = new Control("joy", "", -1, 0.160f, 0.720f, 0.130f);
         controls.add(joystick);
-        controls.add(new Control("A", "A", HudBridge.BTN_A, 0.865f, 0.775f, 0.072f));
-        controls.add(new Control("B", "B", HudBridge.BTN_B, 0.775f, 0.685f, 0.062f));
-        controls.add(new Control("X", "X", HudBridge.BTN_X, 0.875f, 0.600f, 0.062f));
-        controls.add(new Control("Y", "Y", HudBridge.BTN_Y, 0.965f, 0.690f, 0.062f));
-        controls.add(new Control("RB", "R1", HudBridge.BTN_RB, 0.950f, 0.520f, 0.050f));
-        controls.add(new Control("LB", "L1", HudBridge.BTN_LB, 0.045f, 0.280f, 0.050f));
-        controls.add(new Control("ST", "≡", HudBridge.BTN_START, 0.500f, 0.940f, 0.042f));
+
+        // Action Buttons: Classic PlayStation diamond layout
+        controls.add(new Control("cross", "✕", HudBridge.BTN_CROSS, 0.860f, 0.820f, 0.072f));      // Bottom
+        controls.add(new Control("circle", "○", HudBridge.BTN_CIRCLE, 0.940f, 0.700f, 0.072f));    // Right
+        controls.add(new Control("square", "□", HudBridge.BTN_SQUARE, 0.780f, 0.700f, 0.072f));    // Left
+        controls.add(new Control("triangle", "△", HudBridge.BTN_TRIANGLE, 0.860f, 0.580f, 0.072f));// Top
+
+        // Shoulder Buttons (L1, L2, R1, R2)
+        controls.add(new Control("L1", "L1", HudBridge.BTN_L1, 0.080f, 0.400f, 0.055f));
+        controls.add(new Control("L2", "L2", HudBridge.BTN_L2, 0.080f, 0.260f, 0.055f));
+        controls.add(new Control("R1", "R1", HudBridge.BTN_R1, 0.920f, 0.400f, 0.055f));
+        controls.add(new Control("R2", "R2", HudBridge.BTN_R2, 0.920f, 0.260f, 0.055f));
+
+        // Center / System Buttons
+        controls.add(new Control("select", "SEL", HudBridge.BTN_SELECT, 0.400f, 0.940f, 0.040f));
+        controls.add(new Control("start", "START", HudBridge.BTN_START, 0.600f, 0.940f, 0.040f));
+
+        // Settings / Edit button (top center - tap only, NEVER accidentally triggered)
+        editButton = new Control("edit", "⚙", -2, 0.500f, 0.060f, 0.040f);
+        controls.add(editButton);
 
         JSONObject saved = controller.loadLayout();
         if (saved != null) {
@@ -122,8 +120,6 @@ public class TouchHudView extends View {
         textPaint.setFakeBoldText(true);
     }
 
-    // --- Public API (used by HudController) ----------------------------------
-
     void setSafeInsets(int l, int t, int r, int b) {
         insetL = l;
         insetT = t;
@@ -132,7 +128,6 @@ public class TouchHudView extends View {
         invalidate();
     }
 
-    /** Smooth show/hide with fade + slight scale; context picks active set. */
     void animateVisibility(boolean show, int hudContext) {
         this.context = hudContext;
         applyContextToControls();
@@ -147,14 +142,11 @@ public class TouchHudView extends View {
             setScaleX(0.96f);
             setScaleY(0.96f);
             animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180).start();
-        }
-        else {
+        } else {
             releaseAll();
             animate().alpha(0f).setDuration(180)
                     .withEndAction(() -> {
                         if (!visible) {
-                            // INVISIBLE keeps the panel window sized; hidden
-                            // views receive no touch dispatch anyway.
                             setVisibility(INVISIBLE);
                             exitEditMode();
                         }
@@ -163,7 +155,6 @@ public class TouchHudView extends View {
         log("visibility -> " + show + " context=" + hudContext);
     }
 
-    /** Release every virtual control (context change, gamepad connect, hide). */
     void releaseAll() {
         for (Control c : controls) {
             if (c.buttonId >= 0 && pressedButtons.contains(c.buttonId)) {
@@ -178,26 +169,15 @@ public class TouchHudView extends View {
         }
         joyKnobDx = joyKnobDy = 0f;
         pointerControls.clear();
-        handler.removeCallbacks(longPressRunnable);
-        longPressPending = false;
         invalidate();
     }
 
-    // --- Context handling -----------------------------------------------------
-
     private void applyContextToControls() {
-        // Climbing: joystick + jump only. OnFoot: everything. Menu/Hidden:
-        // nothing interactive (the engine handles touches natively there and
-        // the controller hides this view + passes touches through).
-        final boolean climbing = context == HudBridge.CONTEXT_CLIMBING;
-        final boolean gameplay = context == HudBridge.CONTEXT_CLIMBING
-                || context == HudBridge.CONTEXT_ON_FOOT;
+        final boolean active = context != HudBridge.CONTEXT_HIDDEN;
         for (Control c : controls) {
-            c.interactive = gameplay && (!climbing || c == joystick || "A".equals(c.id));
+            c.interactive = active;
         }
     }
-
-    // --- Layout persistence ----------------------------------------------------
 
     private JSONObject toJSON() {
         try {
@@ -240,8 +220,6 @@ public class TouchHudView extends View {
         return Math.max(0f, Math.min(1f, v));
     }
 
-    // --- Geometry helpers -------------------------------------------------------
-
     private float safeW() {
         return Math.max(1, getWidth() - insetL - insetR);
     }
@@ -270,7 +248,7 @@ public class TouchHudView extends View {
             float dx = x - cx(c);
             float dy = y - cy(c);
             float dist = (float) Math.hypot(dx, dy);
-            float reach = radius(c) * (c == joystick ? 1.6f : 1.35f);
+            float reach = radius(c) * (c == joystick ? 1.8f : 1.35f);
             if (dist <= reach && dist < bestDist) {
                 bestDist = dist;
                 hit = c;
@@ -283,8 +261,9 @@ public class TouchHudView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        if (!visible || editMode) {
-            return editMode ? handleEditTouch(event) : false;
+        if (!visible) return false;
+        if (editMode) {
+            return handleEditTouch(event);
         }
 
         final int action = event.getActionMasked();
@@ -295,17 +274,30 @@ public class TouchHudView extends View {
                 int pid = event.getPointerId(idx);
                 float x = event.getX(idx);
                 float y = event.getY(idx);
+
                 Control c = controlAt(x, y);
+
+                // Check if user tapped the dedicated edit button
+                if (c == editButton) {
+                    enterEditMode();
+                    return true;
+                }
+
+                // If no specific button was hit, check if touch is in the left joystick zone
+                if (c == null && joyPointerId == -1) {
+                    if (x < safeW() * 0.45f && y > safeH() * 0.30f) {
+                        c = joystick;
+                    }
+                }
+
                 pointerControls.put(pid, c != null ? c.id : "");
                 if (c != null) {
                     if (c == joystick) {
                         joyPointerId = pid;
                         updateJoystick(x, y);
-                    }
-                    else {
+                    } else if (c.buttonId >= 0) {
                         pressButton(c, true);
                     }
-                    startLongPressDetection(pid, x, y);
                 }
                 return true;
             }
@@ -320,11 +312,6 @@ public class TouchHudView extends View {
                     float y = event.getY(i);
                     if (c == joystick && pid == joyPointerId) {
                         updateJoystick(x, y);
-                    }
-                    if (longPressPending && pid == longPressPointer) {
-                        if (Math.hypot(x - longPressStartX, y - longPressStartY) > touchSlopPx()) {
-                            cancelLongPressDetection();
-                        }
                     }
                 }
                 return true;
@@ -341,9 +328,6 @@ public class TouchHudView extends View {
                     HudBridge.nativePostAxis(HudBridge.AXIS_LEFT_Y, 0f);
                     invalidate();
                 }
-                if (pointerControls.size() == 0) {
-                    cancelLongPressDetection();
-                }
                 return true;
             }
             case MotionEvent.ACTION_CANCEL: {
@@ -353,25 +337,6 @@ public class TouchHudView extends View {
             default:
                 return true;
         }
-    }
-
-    private void startLongPressDetection(int pid, float x, float y) {
-        longPressStartX = x;
-        longPressStartY = y;
-        longPressPointer = pid;
-        longPressPending = true;
-        handler.removeCallbacks(longPressRunnable);
-        handler.postDelayed(longPressRunnable, EDIT_LONGPRESS_MS);
-    }
-
-    private void cancelLongPressDetection() {
-        handler.removeCallbacks(longPressRunnable);
-        longPressPending = false;
-        longPressPointer = -1;
-    }
-
-    private float touchSlopPx() {
-        return android.view.ViewConfiguration.get(getContext()).getScaledTouchSlop() * 2f;
     }
 
     private void updateJoystick(float x, float y) {
@@ -385,7 +350,7 @@ public class TouchHudView extends View {
         }
         joyKnobDx = dx;
         joyKnobDy = dy;
-        // Screen Y is down-positive, matching the GLFW/gamepad axis convention.
+        // Screen Y is down-positive
         HudBridge.nativePostAxis(HudBridge.AXIS_LEFT_X, clampAxis(dx / r));
         HudBridge.nativePostAxis(HudBridge.AXIS_LEFT_Y, clampAxis(dy / r));
         invalidate();
@@ -396,12 +361,12 @@ public class TouchHudView extends View {
     }
 
     private void pressButton(Control c, boolean down) {
+        if (c.buttonId < 0) return;
         if (down) {
             pressedButtons.add(c.buttonId);
             HudBridge.nativePostButton(c.buttonId, true);
             performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
-        }
-        else {
+        } else {
             pressedButtons.remove(c.buttonId);
             HudBridge.nativePostButton(c.buttonId, false);
         }
@@ -413,7 +378,7 @@ public class TouchHudView extends View {
         pointerControls.delete(pid);
         if (assigned.isEmpty()) return;
         Control c = findControl(assigned);
-        if (c != null && c != joystick) {
+        if (c != null && c != joystick && c.buttonId >= 0) {
             pressButton(c, false);
         }
     }
@@ -425,24 +390,15 @@ public class TouchHudView extends View {
         return null;
     }
 
-    // --- Edit mode -----------------------------------------------------------------
+    // --- Edit mode (Dedicated Menu, never triggered accidentally) ----------------
 
     private void enterEditMode() {
         if (!visible || editMode) return;
-        Control hit = null;
-        // Select the control under the original long-press position.
-        for (int i = 0; i < pointerControls.size(); i++) {
-            String assigned = pointerControls.valueAt(i);
-            if (!assigned.isEmpty()) {
-                hit = findControl(assigned);
-                break;
-            }
-        }
         releaseAll();
         editMode = true;
-        selectedControl = hit != null ? hit : controls.get(1);
+        selectedControl = controls.get(1); // Default select Cross button
         performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
-        log("edit mode entered (selected " + selectedControl.id + ")");
+        log("edit mode entered");
         invalidate();
     }
 
@@ -469,7 +425,7 @@ public class TouchHudView extends View {
                     }
                 }
                 Control c = controlAt(x, y);
-                if (c != null) {
+                if (c != null && c != editButton) {
                     selectedControl = c;
                     pointerControls.put(event.getPointerId(0), c.id);
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
@@ -477,7 +433,6 @@ public class TouchHudView extends View {
                 return true;
             }
             case MotionEvent.ACTION_MOVE: {
-                // Single-finger drag of the selected control in edit mode.
                 if (selectedControl != null) {
                     float x = event.getX();
                     float y = event.getY();
@@ -505,7 +460,7 @@ public class TouchHudView extends View {
                 break;
             case "Maior":
                 if (selectedControl != null) {
-                    selectedControl.nr = Math.min(0.18f, selectedControl.nr + 0.008f);
+                    selectedControl.nr = Math.min(0.20f, selectedControl.nr + 0.008f);
                 }
                 break;
             case "Opac-":
@@ -535,7 +490,7 @@ public class TouchHudView extends View {
         float base = Math.min(safeW(), safeH());
 
         for (Control c : controls) {
-            if (!c.interactive) continue;
+            if (!c.interactive && !editMode) continue;
             float x = cx(c);
             float y = cy(c);
             float r = radius(c);
@@ -543,14 +498,13 @@ public class TouchHudView extends View {
 
             if (lowContrast) {
                 strokePaint.setStrokeWidth(Math.max(2f, base * 0.006f));
-                strokePaint.setAlpha(alpha);
+                strokePaint.setAlpha(c == editButton ? 120 : alpha);
                 canvas.drawCircle(x, y, r, strokePaint);
-            }
-            else {
-                fillPaint.setAlpha(pressed ? Math.min(255, alpha + 90) : alpha);
+            } else {
+                fillPaint.setAlpha(pressed ? Math.min(255, alpha + 90) : (c == editButton ? 100 : alpha));
                 canvas.drawCircle(x, y, r, fillPaint);
                 strokePaint.setStrokeWidth(Math.max(2f, base * 0.004f));
-                strokePaint.setAlpha(200);
+                strokePaint.setAlpha(c == editButton ? 140 : 200);
                 canvas.drawCircle(x, y, r, strokePaint);
             }
 
@@ -558,9 +512,8 @@ public class TouchHudView extends View {
                 float knobR = r * 0.45f;
                 knobPaint.setAlpha(Math.min(255, alpha + 60));
                 canvas.drawCircle(x + joyKnobDx, y + joyKnobDy, knobR, knobPaint);
-            }
-            else if (!c.label.isEmpty()) {
-                textPaint.setTextSize(r * 0.85f);
+            } else if (!c.label.isEmpty()) {
+                textPaint.setTextSize(c.label.length() > 2 ? r * 0.45f : r * 0.85f);
                 textPaint.setAlpha(lowContrast ? alpha : 255);
                 Paint.FontMetrics fm = textPaint.getFontMetrics();
                 float textY = y - (fm.ascent + fm.descent) / 2f;

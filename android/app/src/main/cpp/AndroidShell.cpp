@@ -235,14 +235,16 @@ extern "C" {
         JNIEnv*, jclass, jint button, jboolean down) {
         uint16_t mask = 0;
         switch (button) {
-            case 0: mask = (1 << 14); break; // A / Cross
-            case 1: mask = (1 << 13); break; // B / Circle
-            case 2: mask = (1 << 15); break; // X / Square
-            case 3: mask = (1 << 12); break; // Y / Triangle
-            case 4: mask = (1 << 10); break; // LB / L1
-            case 5: mask = (1 << 11); break; // RB / R1
+            case 0: mask = (1 << 14); break; // Cross (✕)
+            case 1: mask = (1 << 13); break; // Circle (○)
+            case 2: mask = (1 << 15); break; // Square (▢)
+            case 3: mask = (1 << 12); break; // Triangle (△)
+            case 4: mask = (1 << 10); break; // L1
+            case 5: mask = (1 << 11); break; // R1
             case 6: mask = (1 << 0);  break; // Select
             case 7: mask = (1 << 3);  break; // Start
+            case 8: mask = (1 << 8);  break; // L2
+            case 9: mask = (1 << 9);  break; // R2
             default: break;
         }
         if (mask != 0) {
@@ -259,12 +261,12 @@ extern "C" {
         JNIEnv*, jclass, jint axis, jfloat value) {
         if (axis == 0) {
             g_stick_x = static_cast<int16_t>(value * 32767.0f);
-            if (value < -0.4f) g_pad_buttons &= ~(1 << 7); else g_pad_buttons |= (1 << 7); // Left
-            if (value > 0.4f)  g_pad_buttons &= ~(1 << 5); else g_pad_buttons |= (1 << 5); // Right
+            if (value < -0.15f) g_pad_buttons &= ~(1 << 7); else g_pad_buttons |= (1 << 7); // Left
+            if (value > 0.15f)  g_pad_buttons &= ~(1 << 5); else g_pad_buttons |= (1 << 5); // Right
         } else if (axis == 1) {
             g_stick_y = static_cast<int16_t>(value * 32767.0f);
-            if (value < -0.4f) g_pad_buttons &= ~(1 << 4); else g_pad_buttons |= (1 << 4); // Up
-            if (value > 0.4f)  g_pad_buttons &= ~(1 << 6); else g_pad_buttons |= (1 << 6); // Down
+            if (value < -0.15f) g_pad_buttons &= ~(1 << 4); else g_pad_buttons |= (1 << 4); // Up
+            if (value > 0.15f)  g_pad_buttons &= ~(1 << 6); else g_pad_buttons |= (1 << 6); // Down
         }
     }
 
